@@ -33,6 +33,28 @@ def algo41(A, r):
 
     return Q
 
+def algo42(A, eps, r):
+    
+    n = A.shape[1]
+    W = np.random.randn(n, r)
+    Y = A.dot(W)
+    thr = eps / 10 / np.sqrt(2 / np.pi)
+    Q = None
+    while norm(Y, axis=0).max() > thr:
+        y = Y[:, 0]
+        if Q is not None:
+            y = y - Q.dot(Q.T.dot(y))
+            q = y / norm(y)
+            Q = np.hstack((Q, q[:, np.newaxis]))
+        else:
+            q = y / norm(y)
+            Q = q[:, np.newaxis]
+        w = np.random.randn(n)
+        y = A.dot(w)
+        y = y - Q.dot(Q.T.dot(y))
+        Y = np.array([z - q.dot(z) * q for z in Y.T[1:]] + [y]).T
+    return Q
+
 
 def algo43(A, q=1, r=None):
     """
@@ -56,6 +78,15 @@ def algo43(A, q=1, r=None):
 
     return Q
 
+def algo44(A, q, r):
+    n = A.shape[1]
+    W = np.random.randn(n, r)
+    Y = A.dot(W)
+    Q, _ = np.linalg.qr(Y)
+    for j in range(q):
+        Q, _ = np.linalg.qr(A.T.dot(Q))
+        Q, _ = np.linalg.qr(A.dot(Q))
+    return Q
 
 def compute_complex_diagonal(n):
     """

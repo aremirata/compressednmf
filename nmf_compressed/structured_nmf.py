@@ -4,18 +4,23 @@ approaches discussed in the paper "Compressed Nonnegative Matrix Factorization
 Is Fast And Accurate"
 """
 
+import scipy
+import sparseqr
 import numpy as np
-from ntf_cython.random import algo42, algo44, rel_error
-from nmf_compressed.compression import algo41, algo43, algo45
+from ntf_cython.random import rel_error
+from numpy.linalg import norm, solve
+from nmf_compressed.compression import algo41, algo42, algo43, algo44, algo45
 from nmf_compressed.compression import algo46, structured_compression
+from nmf_compressed.sparse_compression import algo41_sparse
 from nmf_compressed.compression import count_gauss
-from nmf_compressed.selection import xray, SPA
+from nmf_compressed.selection import xray, SPA, nnls
 from ntf_cython.nmf import bpp
 from numpy.linalg import solve
-
+from ntf_cython.nmf import _nmf_bpp
+import scipy.sparse as sps
 
 def compression_left(A, q=1, r=100, eps=0.01, oversampling=10,
-                     oversampling_factor=10, algo='algo44'):
+                     oversampling_factor=10, algo='algo44', sparse=False):
     """
     Compute the projection matrix with orthonormal columns
 
@@ -52,6 +57,11 @@ def compression_left(A, q=1, r=100, eps=0.01, oversampling=10,
         L = structured_compression(A, q, r, oversampling)
     elif algo == 'count_gaussian':
         L, Z = count_gauss(A, r, oversampling_factor)
+    elif algo == 'algo41_sparse':
+        L = algo41_sparse(A, r)
+    elif algo == 'sparseqr':
+        L_, _, _, _ = sparseqr.qr(A)
+        L = L_.tocsc()[:,:r].tocoo()
     else:
         L, _ = np.linalg.qr(A)
 
@@ -96,6 +106,11 @@ def compression_right(A, q=1, r=100, eps=0.01, oversampling=10,
         R = structured_compression(A.T, q, r, oversampling).T
     elif algo == 'count_gaussian':
         R, Zt = count_gauss(A, r, oversampling_factor).T
+    elif algo == 'algo41_sparse':
+        R = algo41_sparse(A.T, r).T
+    elif algo == 'sparseqr':
+        R_, _, _, _ = sparseqr.qr(A.T)
+        R = R_.tocsc()[:,:r].tocoo()
     else:
         R, _ = np.linalg.qr(A.T)
 
@@ -237,20 +252,37 @@ def structured_randomized_bppnmf(A, q=1, r=50, max_iter=50, eps=0.01,
     algorithm of separable nmf based on structured compression and structured
     compression method for bpp.
     """
-
+    
     L = compression_left(A, r=r, algo=algo)
-    R = compression_right(A, r=r, algo=algo)
     A_ = L.T.dot(A)
-
-    cols = xray(A_, r)
-    H = bpp(A_[:,cols], A_)
-    W = A_[:,cols]
+    
     relative_error = []
 
+    cols = xray(A_, r)
+    if (sps.isspmatrix(A_)):
+        H, _ = nnls(A_[:, cols], A_)
+        W = A_[:,cols]
+        
+        
+    else:
+        H = bpp(A_[:,cols], A_)
+        W = A_[:,cols]
+        
+    
+    
     for _ in range(max_iter):
-        H = bpp(W, A_, H>0)
-        W = bpp(H.T, A_.T, W.T>0).T
-        relative_error.append(rel_error(A, L.dot(W).dot(H)))
+        if sps.isspmatrix(A_):
+            if relative_error[0] >=0.1:
+                H, _ = nnls(W, A_)
+                W = A_[:,cols]
+                print(scipy.sparse.linalg.norm(A - L.dot(W).dot(H)))
+                relative_error.append(scipy.sparse.linalg.norm(A - L.dot(W).dot(H)) / scipy.sparse.linalg.norm(A))
+            else:
+                break
+        else:
+            H = bpp(W, A_, H>0)
+            W = bpp(H.T, A_.T, W.T>0).T
+            relative_error.append(rel_error(A, L.dot(W).dot(H)))
 
     return L.dot(W), H, relative_error
 
