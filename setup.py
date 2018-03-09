@@ -1,7 +1,5 @@
 from distutils.core import setup
 from distutils.extension import Extension
-import numpy
-import scipy
 
 setup(
     name='nmf_compressed',

@@ -12,43 +12,6 @@ from ntf_cython.nmf import bpp as bpp
 import scipy.optimize as optimize
 from operator import truediv as div
 
-def compute_norm(A, p=None, axis=None):
-    assert 1 in A.shape or p != 2 or axis is not None,\
-        "Computing entry-wise norms only."
-    if sps.issparse(A):
-        X = sps.linalg.norm(A, ord=p, axis=axis)
-    else:
-        X = np.linalg.norm(A, ord=p, axis=axis)
-    return X
-
-def nnls(W, V):
-    """
-    Compute H, the coefficient matrix, by nonnegative least squares
-    to minimize the Frobenius norm.  Given the data matrix V and the
-    basis matrix W, H is
-    .. math:: \arg\min_{Y \ge 0} \| V - W H \|_F.
-    :param V: The data matrix.
-    :type V: numpy.ndarray
-    :param W: The data matrix.
-    :type W: numpy.ndarray
-    :return: The matrix H and the relative residual.
-    """
-    
-    if sps.isspmatrix(W):
-        W = W.todense()
-     
-    ncols = V.shape[1]
-    H = []
-    total_res = 0
-    for i in range(ncols):
-        V_ = V[:, i].todense()
-        b = np.squeeze(np.array(V_))
-        sol, res = optimize.nnls(np.array(W), b)
-        H.append(sol[:, np.newaxis])
-        total_res += res ** 2
-    return coo_matrix(np.hstack(H)), total_res
-
-
 def xray(A, r):
     """
     This algorithm implements Algorithm 1 in "Fast Conical Hull Algorithms
@@ -64,16 +27,9 @@ def xray(A, r):
         # Find an extreme ray by looping until a column has been
         # chosen which was not previously selected
         while True:
-            if sps.isspmatrix(A):
-                p = sps.rand(1, A.shape[0])
-                scores = compute_norm(np.dot(R.T, A), axis=0)
-                scores = sps.csc_matrix(scores) / (np.dot(p, A))
-            else:
-                p = np.random.random((1, A.shape[0]))
-                scores = compute_norm(np.dot(R.T, A), axis=0)
-                scores = scores / (np.dot(p, A))
-            
-            
+            p = np.random.random((1, A.shape[0]))
+            scores = np.linalg.norm(np.dot(R.T, A), axis=0)
+            scores = scores / (np.dot(p, A))
             scores[0, cols] = -1
             best_col = np.argmax(scores)
 
@@ -81,11 +37,7 @@ def xray(A, r):
                 continue
             else:
                 cols.append(best_col)
-                if sps.isspmatrix(A):
-                    H, _ = nnls(A[:, cols], A)
-                else:
-                    H = bpp(A[:, cols], A)
-                    
+                H = bpp(A[:, cols], A)
                 R = A - np.dot(A[:, cols], H)
                 break
     return cols

@@ -11,12 +11,11 @@ from ntf_cython.random import rel_error
 from numpy.linalg import norm, solve
 from nmf_compressed.compression import algo41, algo42, algo43, algo44, algo45
 from nmf_compressed.compression import algo46, structured_compression
-from nmf_compressed.sparse_compression import algo41_sparse
 from nmf_compressed.compression import count_gauss
-from nmf_compressed.selection import xray, SPA, nnls
+from nmf_compressed.selection import xray, SPA
 from ntf_cython.nmf import bpp
 from numpy.linalg import solve
-from ntf_cython.nmf import _nmf_bpp
+from ntf_cython.nmf import nmf
 import scipy.sparse as sps
 
 def compression_left(A, q=1, r=100, eps=0.01, oversampling=10,
@@ -57,11 +56,6 @@ def compression_left(A, q=1, r=100, eps=0.01, oversampling=10,
         L = structured_compression(A, q, r, oversampling)
     elif algo == 'count_gaussian':
         L, Z = count_gauss(A, r, oversampling_factor)
-    elif algo == 'algo41_sparse':
-        L = algo41_sparse(A, r)
-    elif algo == 'sparseqr':
-        L_, _, _, _ = sparseqr.qr(A)
-        L = L_.tocsc()[:,:r].tocoo()
     else:
         L, _ = np.linalg.qr(A)
 
@@ -106,86 +100,10 @@ def compression_right(A, q=1, r=100, eps=0.01, oversampling=10,
         R = structured_compression(A.T, q, r, oversampling).T
     elif algo == 'count_gaussian':
         R, Zt = count_gauss(A, r, oversampling_factor).T
-    elif algo == 'algo41_sparse':
-        R = algo41_sparse(A.T, r).T
-    elif algo == 'sparseqr':
-        R_, _, _, _ = sparseqr.qr(A.T)
-        R = R_.tocsc()[:,:r].tocoo()
     else:
         R, _ = np.linalg.qr(A.T)
 
     return R
-
-def admm_2a(A, algo=None, q=1, r=100, max_iter=1000,
-                       eps=0.01, oversampling=10, oversampling_factor=20,
-                       lam=1., phi=1., c=1., limit=7, random_state=None,
-                       tol=0.7):
-    """
-    NMF using structured random compression via alternating direction method
-    of multipliers(ADMM)
-
-    Parameters
-    ----------
-    A: numpy.array
-        Input data
-    q: integer, default: 1
-        Exponent used in algo43 and algo44
-    r: integer, default: 1
-        Target rank
-    max_iter: integer, default:1000
-        Maximum number of iterations for ADMM
-    eps: double, default:0.01
-        Tolerance value used in algo42
-    oversampling: integer, default:10
-        A parameter granting more freedom in the choice of Q used in
-        structured_compression algorithm
-    oversampling_factor: integer, default:10
-        A parameter used in count_gauss compression algorithm
-    algo: compression algorithm used
-    random_state: integer
-    """
-
-    m, n = A.shape
-    l = min(n, max(oversampling_factor, r+10))
-
-    OmegaL = np.random.randn(n, l)
-    H = np.dot(A, OmegaL)
-
-    for j in range(0, limit):
-        H = np.dot(A, np.dot(A.T, H))
-    L = compression_left(H, algo, q, l, eps, oversampling,
-                         oversampling_factor)
-    LA = np.dot(L.T, A)
-
-    OmegaR = np.random.randn(l, l)
-    H = np.dot(OmegaR, LA)
-
-    for j in range(0, limit):
-        H = np.dot(np.dot(H, LA.T), LA)
-
-    R = compression_left(H.T, algo, q, l, eps, oversampling,
-                         oversampling_factor)
-    R = R.T
-    M = np.dot(LA, R.T)
-
-    np.random.seed(random_state)
-    U = np.random.rand(m, r)
-    V = np.random.randn(r, n)
-    Y = V.dot(R.T)
-
-    Lam = np.zeros((m, r))
-    Phi = np.zeros((r, n))
-    I = np.eye(r)
-    iter_ = 0
-
-    relative_error = []
-
-    while iter_ <= max_iter:
-        X = solve((Y.dot(Y.T) + lam * I).T,
-                  (M.dot(Y.T) + (lam * L.T.dot(U) - L.T.dot(Lam))).T).T
-        Y = solve(X.T.dot(X) + phi * I,
-                  X.T.dot(M) + phi * V.dot(R.T) - Phi.dot(R.T))
-        U = np.maximum(L.dot(X) + Lam/lam, 1e-15)
 
 
 def sep_nmf(A, q=1, r=50, max_iter=50, eps=0.01, oversampling=10,
@@ -252,37 +170,29 @@ def structured_randomized_bppnmf(A, q=1, r=50, max_iter=50, eps=0.01,
     algorithm of separable nmf based on structured compression and structured
     compression method for bpp.
     """
+    if sps.isspmatrix(A):
+        print("The matrix is sparse. We use block principal pivoting method")
+        W, H, n_iter, relative_error = nmf(A, n_components=r, max_iter=max_iter, random_state=random_state)
     
-    L = compression_left(A, r=r, algo=algo)
-    A_ = L.T.dot(A)
-    
-    relative_error = []
-
-    cols = xray(A_, r)
-    if (sps.isspmatrix(A_)):
-        H, _ = nnls(A_[:, cols], A_)
-        W = A_[:,cols]
-        
-        
     else:
-        H = bpp(A_[:,cols], A_)
-        W = A_[:,cols]
-        
-    
-    
-    for _ in range(max_iter):
-        if sps.isspmatrix(A_):
-            if relative_error[0] >=0.1:
-                H, _ = nnls(W, A_)
-                W = A_[:,cols]
-                print(scipy.sparse.linalg.norm(A - L.dot(W).dot(H)))
-                relative_error.append(scipy.sparse.linalg.norm(A - L.dot(W).dot(H)) / scipy.sparse.linalg.norm(A))
-            else:
-                break
-        else:
-            H = bpp(W, A_, H>0)
-            W = bpp(H.T, A_.T, W.T>0).T
-            relative_error.append(rel_error(A, L.dot(W).dot(H)))
+        print("The matrix is dense. We use compressed block principal pivoting method")
+        L = compression_left(A, r=r, algo=algo)
+        A_ = L.T.dot(A)
 
-    return L.dot(W), H, relative_error
+        relative_error = []
+
+        cols = xray(A_, r)
+
+        H_ = bpp(A_[:,cols], A_)
+        W_ = A_[:,cols]
+
+        for _ in range(max_iter):
+            H_ = bpp(W_, A_, H_>0)
+            W_ = bpp(H_.T, A_.T, W_.T>0).T
+            relative_error.append(rel_error(A, L.dot(W_).dot(H_)))
+            
+        W = L.dot(W_)
+        H = H_
+
+    return W, H, relative_error
 
